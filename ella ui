@@ -180,6 +180,14 @@ function EllaLibrary.CreateLib(windowTitle, themeName, options)
     self.Connections = {}
     self.LastOpenedDropdown = nil
     self.MainVisible = true
+    self.LayoutMode = options.LayoutMode or (options.TopDock and "TopDock" or "Window")
+    self.Draggable = options.Draggable
+    self.TopOffset = tonumber(options.TopOffset) or 10
+    self.WindowedSize = options.WindowedSize or UDim2.fromOffset(760, 490)
+    self.TopDockSize = options.TopDockSize or UDim2.new(1, -80, 0, 360)
+    if self.Draggable == nil then
+        self.Draggable = self.LayoutMode ~= "TopDock"
+    end
 
     if typeof(options.Theme) == "table" then
         for k, v in pairs(options.Theme) do
@@ -202,8 +210,17 @@ function EllaLibrary.CreateLib(windowTitle, themeName, options)
     self.Gui = gui
 
     local root = Instance.new("Frame")
-    root.Size = UDim2.fromOffset(760, 490)
-    root.Position = UDim2.new(0.5, -380, 0.5, -245)
+    if options.Size then
+        root.Size = options.Size
+    else
+        root.Size = self.LayoutMode == "TopDock" and self.TopDockSize or self.WindowedSize
+    end
+    if self.LayoutMode == "TopDock" then
+        root.AnchorPoint = Vector2.new(0.5, 0)
+        root.Position = options.Position or UDim2.new(0.5, 0, 0, self.TopOffset)
+    else
+        root.Position = options.Position or UDim2.new(0.5, -380, 0.5, -245)
+    end
     root.BackgroundColor3 = self.Theme.Background
     root.BorderSizePixel = 0
     root.Parent = gui
@@ -272,7 +289,7 @@ function EllaLibrary.CreateLib(windowTitle, themeName, options)
     local tabList = Instance.new("ScrollingFrame")
     tabList.Name = "TabList"
     tabList.Position = UDim2.fromOffset(12, 56)
-    tabList.Size = UDim2.fromOffset(210, 422)
+    tabList.Size = UDim2.new(0, 210, 1, -68)
     tabList.BackgroundColor3 = self.Theme.TopBar
     tabList.BorderSizePixel = 0
     tabList.ScrollBarImageColor3 = Color3.fromRGB(80, 85, 108)
@@ -288,7 +305,7 @@ function EllaLibrary.CreateLib(windowTitle, themeName, options)
 
     local pages = Instance.new("Frame")
     pages.Position = UDim2.fromOffset(232, 56)
-    pages.Size = UDim2.fromOffset(516, 422)
+    pages.Size = UDim2.new(1, -244, 1, -68)
     pages.BackgroundColor3 = self.Theme.TopBar
     pages.BorderSizePixel = 0
     pages.Parent = root
@@ -316,6 +333,9 @@ function EllaLibrary.CreateLib(windowTitle, themeName, options)
     local startPos
 
     table.insert(self.Connections, top.InputBegan:Connect(function(input)
+        if not self.Draggable then
+            return
+        end
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
             dragging = true
             dragStart = input.Position
@@ -324,12 +344,18 @@ function EllaLibrary.CreateLib(windowTitle, themeName, options)
     end))
 
     table.insert(self.Connections, top.InputEnded:Connect(function(input)
+        if not self.Draggable then
+            return
+        end
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
             dragging = false
         end
     end))
 
     table.insert(self.Connections, UserInputService.InputChanged:Connect(function(input)
+        if not self.Draggable then
+            return
+        end
         if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
             local delta = input.Position - dragStart
             root.Position = UDim2.new(
@@ -371,6 +397,26 @@ function EllaLibrary.CreateLib(windowTitle, themeName, options)
     function self:SetToggleKey(keyCode)
         if typeof(keyCode) == "EnumItem" and keyCode.EnumType == Enum.KeyCode then
             self.ToggleKey = keyCode
+        end
+    end
+
+    function self:SetTopDock(enabled)
+        if enabled then
+            self.LayoutMode = "TopDock"
+            self.Draggable = false
+            root.AnchorPoint = Vector2.new(0.5, 0)
+            root.Size = self.TopDockSize
+            TweenService:Create(root, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Position = UDim2.new(0.5, 0, 0, self.TopOffset)
+            }):Play()
+        else
+            self.LayoutMode = "Window"
+            self.Draggable = true
+            root.AnchorPoint = Vector2.new(0, 0)
+            root.Size = self.WindowedSize
+            TweenService:Create(root, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                Position = UDim2.new(0.5, -380, 0.5, -245)
+            }):Play()
         end
     end
 
@@ -1262,6 +1308,251 @@ function EllaLibrary.CreateLib(windowTitle, themeName, options)
     end
 
     return self
+end
+
+function EllaLibrary.CreateTopPrompt(options)
+    options = options or {}
+    local titleText = options.Title or "AK ADMIN"
+    local subtitleText = options.Subtitle or "Authentication required"
+    local autoExecute = options.AutoExecute == true
+    local onAuthenticate = options.OnAuthenticate
+    local onGetKey = options.OnGetKey
+    local onAutoToggle = options.OnAutoToggle
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "EllaTopPrompt"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    gui.Parent = resolveGuiParent()
+    safeProtectGui(gui)
+
+    local holder = Instance.new("Frame")
+    holder.Size = UDim2.fromOffset(620, 150)
+    holder.AnchorPoint = Vector2.new(0.5, 0)
+    holder.Position = UDim2.new(0.5, 0, 0, -180)
+    holder.BackgroundColor3 = Color3.fromRGB(17, 20, 28)
+    holder.BorderSizePixel = 0
+    holder.Parent = gui
+    applyCorner(holder, 14)
+    makeStroke(holder, Color3.fromRGB(52, 58, 76), 0.3)
+
+    local gradient = Instance.new("UIGradient")
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(18, 22, 31)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 24, 34))
+    })
+    gradient.Rotation = 0
+    gradient.Parent = holder
+
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.fromOffset(56, 14)
+    title.Size = UDim2.new(1, -170, 0, 20)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 18
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextColor3 = Color3.fromRGB(245, 248, 255)
+    title.Text = titleText
+    title.Parent = holder
+
+    local sub = Instance.new("TextLabel")
+    sub.BackgroundTransparency = 1
+    sub.Position = UDim2.fromOffset(56, 36)
+    sub.Size = UDim2.new(1, -170, 0, 16)
+    sub.Font = Enum.Font.Gotham
+    sub.TextSize = 12
+    sub.TextXAlignment = Enum.TextXAlignment.Left
+    sub.TextColor3 = Color3.fromRGB(150, 164, 190)
+    sub.Text = subtitleText
+    sub.Parent = holder
+
+    local accent = Instance.new("Frame")
+    accent.Size = UDim2.fromOffset(104, 2)
+    accent.Position = UDim2.fromOffset(56, 58)
+    accent.BackgroundColor3 = Color3.fromRGB(0, 226, 110)
+    accent.BorderSizePixel = 0
+    accent.Parent = holder
+    applyCorner(accent, 999)
+
+    local logo = Instance.new("ImageLabel")
+    logo.BackgroundTransparency = 1
+    logo.Size = UDim2.fromOffset(28, 28)
+    logo.Position = UDim2.fromOffset(18, 16)
+    logo.Image = options.Logo or "rbxassetid://7733960981"
+    logo.ImageColor3 = Color3.fromRGB(240, 246, 255)
+    logo.Parent = holder
+
+    local autoLabel = Instance.new("TextLabel")
+    autoLabel.BackgroundTransparency = 1
+    autoLabel.Size = UDim2.fromOffset(110, 16)
+    autoLabel.Position = UDim2.new(1, -156, 20/150, 0)
+    autoLabel.Font = Enum.Font.Gotham
+    autoLabel.TextSize = 11
+    autoLabel.TextXAlignment = Enum.TextXAlignment.Right
+    autoLabel.TextColor3 = Color3.fromRGB(148, 160, 184)
+    autoLabel.Text = "Auto Execute"
+    autoLabel.Parent = holder
+
+    local toggle = Instance.new("TextButton")
+    toggle.Size = UDim2.fromOffset(26, 14)
+    toggle.Position = UDim2.new(1, -38, 20/150, 1)
+    toggle.BackgroundColor3 = Color3.fromRGB(42, 47, 62)
+    toggle.Text = ""
+    toggle.AutoButtonColor = false
+    toggle.BorderSizePixel = 0
+    toggle.Parent = holder
+    applyCorner(toggle, 999)
+
+    local toggleDot = Instance.new("Frame")
+    toggleDot.Size = UDim2.fromOffset(10, 10)
+    toggleDot.Position = UDim2.fromOffset(2, 2)
+    toggleDot.BackgroundColor3 = Color3.fromRGB(230, 234, 247)
+    toggleDot.BorderSizePixel = 0
+    toggleDot.Parent = toggle
+    applyCorner(toggleDot, 999)
+
+    local keyBox = Instance.new("TextBox")
+    keyBox.Size = UDim2.new(1, -28, 0, 28)
+    keyBox.Position = UDim2.fromOffset(14, 72)
+    keyBox.BackgroundColor3 = Color3.fromRGB(8, 11, 17)
+    keyBox.TextColor3 = Color3.fromRGB(234, 238, 250)
+    keyBox.PlaceholderColor3 = Color3.fromRGB(97, 108, 131)
+    keyBox.PlaceholderText = options.Placeholder or "enter authentication key..."
+    keyBox.Text = ""
+    keyBox.Font = Enum.Font.Gotham
+    keyBox.TextSize = 12
+    keyBox.ClearTextOnFocus = false
+    keyBox.BorderSizePixel = 0
+    keyBox.Parent = holder
+    applyCorner(keyBox, 6)
+    makeStroke(keyBox, Color3.fromRGB(49, 56, 76), 0.45)
+
+    local authBtn = Instance.new("TextButton")
+    authBtn.Size = UDim2.new(0.5, -21, 0, 28)
+    authBtn.Position = UDim2.fromOffset(14, 108)
+    authBtn.BackgroundColor3 = Color3.fromRGB(6, 90, 24)
+    authBtn.TextColor3 = Color3.fromRGB(154, 255, 176)
+    authBtn.Text = options.AuthText or "Authenticate"
+    authBtn.Font = Enum.Font.GothamBold
+    authBtn.TextSize = 13
+    authBtn.AutoButtonColor = false
+    authBtn.BorderSizePixel = 0
+    authBtn.Parent = holder
+    applyCorner(authBtn, 6)
+
+    local getKeyBtn = Instance.new("TextButton")
+    getKeyBtn.Size = UDim2.new(0.5, -21, 0, 28)
+    getKeyBtn.Position = UDim2.new(0.5, 7, 0, 108)
+    getKeyBtn.BackgroundColor3 = Color3.fromRGB(6, 90, 24)
+    getKeyBtn.TextColor3 = Color3.fromRGB(154, 255, 176)
+    getKeyBtn.Text = options.GetKeyText or "Get Key"
+    getKeyBtn.Font = Enum.Font.GothamBold
+    getKeyBtn.TextSize = 13
+    getKeyBtn.AutoButtonColor = false
+    getKeyBtn.BorderSizePixel = 0
+    getKeyBtn.Parent = holder
+    applyCorner(getKeyBtn, 6)
+
+    local function setAuto(value, skipCallback)
+        autoExecute = value == true
+        TweenService:Create(toggle, TweenInfo.new(0.2), {
+            BackgroundColor3 = autoExecute and Color3.fromRGB(0, 163, 70) or Color3.fromRGB(42, 47, 62)
+        }):Play()
+        TweenService:Create(toggleDot, TweenInfo.new(0.2), {
+            Position = autoExecute and UDim2.fromOffset(14, 2) or UDim2.fromOffset(2, 2)
+        }):Play()
+        if not skipCallback and type(onAutoToggle) == "function" then
+            pcall(onAutoToggle, autoExecute)
+        end
+    end
+
+    toggle.MouseButton1Click:Connect(function()
+        setAuto(not autoExecute, false)
+    end)
+
+    authBtn.MouseButton1Click:Connect(function()
+        if type(onAuthenticate) == "function" then
+            pcall(onAuthenticate, keyBox.Text, autoExecute)
+        end
+    end)
+
+    getKeyBtn.MouseButton1Click:Connect(function()
+        if type(onGetKey) == "function" then
+            pcall(onGetKey)
+        end
+    end)
+
+    setAuto(autoExecute, true)
+
+    local tweenIn = TweenService:Create(
+        holder,
+        TweenInfo.new(0.45, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+        { Position = UDim2.new(0.5, 0, 0, 24) }
+    )
+    tweenIn:Play()
+
+    local api = {}
+
+    function api:SetStatus(text, color)
+        sub.Text = tostring(text or "")
+        if typeof(color) == "Color3" then
+            sub.TextColor3 = color
+        end
+    end
+
+    function api:SetTitle(text)
+        title.Text = tostring(text or "")
+    end
+
+    function api:SetAutoExecute(value, skipCallback)
+        setAuto(value, skipCallback == true)
+    end
+
+    function api:GetAutoExecute()
+        return autoExecute
+    end
+
+    function api:GetKey()
+        return keyBox.Text
+    end
+
+    function api:SetKey(value)
+        keyBox.Text = tostring(value or "")
+    end
+
+    function api:Show()
+        holder.Visible = true
+        TweenService:Create(
+            holder,
+            TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+            { Position = UDim2.new(0.5, 0, 0, 24) }
+        ):Play()
+    end
+
+    function api:Hide()
+        local t = TweenService:Create(
+            holder,
+            TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.In),
+            { Position = UDim2.new(0.5, 0, 0, -180) }
+        )
+        t:Play()
+        t.Completed:Wait()
+        holder.Visible = false
+    end
+
+    function api:Destroy()
+        if gui then
+            gui:Destroy()
+        end
+    end
+
+    api.Gui = gui
+    api.Frame = holder
+    api.Input = keyBox
+    api.AuthenticateButton = authBtn
+    api.GetKeyButton = getKeyBtn
+    return api
 end
 
 getgenv().EllaLibrary = EllaLibrary
