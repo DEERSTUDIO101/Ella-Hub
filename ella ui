@@ -1,0 +1,833 @@
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+
+local FloatingBar = {}
+FloatingBar.__index = FloatingBar
+
+local MARKER_NAME = "EllaFloatingBarMarker"
+local DEFAULT_ICON = "rbxassetid://7733960981"
+
+local VARIANTS = {
+    Default = {
+        AccentColor = Color3.fromRGB(0, 170, 255),
+        Icon = DEFAULT_ICON
+    },
+    Info = {
+        AccentColor = Color3.fromRGB(78, 171, 255),
+        Icon = "rbxassetid://7733658504"
+    },
+    Success = {
+        AccentColor = Color3.fromRGB(64, 226, 138),
+        Icon = "rbxassetid://6031094678"
+    },
+    Warn = {
+        AccentColor = Color3.fromRGB(255, 196, 71),
+        Icon = "rbxassetid://6031091004"
+    },
+    Error = {
+        AccentColor = Color3.fromRGB(255, 95, 95),
+        Icon = "rbxassetid://6031071053"
+    }
+}
+
+local function resolveGuiParent()
+    if typeof(gethui) == "function" then
+        local ok, result = pcall(gethui)
+        if ok and typeof(result) == "Instance" then
+            return result
+        end
+    end
+
+    if typeof(cloneref) == "function" then
+        local ok, result = pcall(function()
+            return cloneref(CoreGui)
+        end)
+        if ok and typeof(result) == "Instance" then
+            return result
+        end
+    end
+
+    return CoreGui
+end
+
+local function normalizeImageSource(imageValue)
+    if imageValue == nil then
+        return ""
+    end
+
+    local asString = tostring(imageValue)
+    if asString == "" then
+        return ""
+    end
+
+    if string.find(asString, "rbxassetid://", 1, true)
+        or string.find(asString, "http://", 1, true)
+        or string.find(asString, "https://", 1, true) then
+        return asString
+    end
+
+    if string.match(asString, "^%d+$") then
+        return "rbxassetid://" .. asString
+    end
+
+    return asString
+end
+
+local function safeProtectGui(gui)
+    if syn and syn.protect_gui then
+        pcall(function()
+            syn.protect_gui(gui)
+        end)
+    end
+end
+
+local function deepCleanup(parent)
+    for _, child in ipairs(parent:GetChildren()) do
+        if child:IsA("ScreenGui") and child:FindFirstChild(MARKER_NAME) then
+            pcall(function()
+                child:Destroy()
+            end)
+        end
+    end
+end
+
+local function safeCall(fn, ...)
+    if type(fn) ~= "function" then
+        return
+    end
+    local ok, err = pcall(fn, ...)
+    if not ok then
+        warn("[EllaFloatingBar] callback error:", err)
+    end
+end
+
+function FloatingBar.new(options)
+    options = options or {}
+
+    local self = setmetatable({}, FloatingBar)
+    self.ParentOverride = options.Parent
+    self.Width = options.Width or 340
+    self.Height = options.Height or 64
+    self.MarginTop = options.MarginTop or 24
+    self.MobileMarginTop = options.MobileMarginTop or 16
+    self.DefaultDuration = options.DefaultDuration or 2.8
+    self.AccentColor = options.AccentColor or Color3.fromRGB(0, 170, 255)
+    self.UIAnimationsEnabled = options.UIAnimationsEnabled ~= false
+    self.MaxQueue = options.MaxQueue or 20
+    self.QueuePaused = false
+    self.Debug = options.Debug == true
+    self.OnShow = options.OnShow
+    self.OnHide = options.OnHide
+    self.OnQueueEmpty = options.OnQueueEmpty
+    self.Theme = {
+        Background = options.BackgroundColor or Color3.fromRGB(18, 18, 22),
+        BodyText = options.BodyTextColor or Color3.fromRGB(200, 205, 220),
+        TitleText = options.TitleTextColor or Color3.fromRGB(245, 245, 250),
+        StrokeTransparency = options.StrokeTransparency or 0.45,
+        BackgroundTransparency = options.BackgroundTransparency or 0.08,
+        ProgressTrackTransparency = options.ProgressTrackTransparency or 0.86
+    }
+
+    self.Queue = {}
+    self.IsShowing = false
+    self.IsPumping = false
+    self.NextId = 0
+    self.ActiveItem = nil
+    self.ActiveProgressTween = nil
+    self.DismissRequested = false
+    self.DismissInstant = false
+
+    self:_createGui()
+    return self
+end
+
+function FloatingBar:_createGui()
+    local parent = self.ParentOverride or resolveGuiParent()
+    deepCleanup(parent)
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "EllaFloatingBar"
+    screenGui.IgnoreGuiInset = true
+    screenGui.ResetOnSpawn = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+
+    local marker = Instance.new("StringValue")
+    marker.Name = MARKER_NAME
+    marker.Value = "v1"
+    marker.Parent = screenGui
+
+    screenGui.Parent = parent
+
+    safeProtectGui(screenGui)
+
+    local holder = Instance.new("Frame")
+    holder.Name = "Holder"
+    holder.Size = UDim2.fromOffset(self.Width, self.Height)
+    holder.AnchorPoint = Vector2.new(0.5, 0)
+    holder.Position = UDim2.new(0.5, 0, 0, -self.Height - 20)
+    holder.BackgroundColor3 = self.Theme.Background
+    holder.BackgroundTransparency = self.Theme.BackgroundTransparency
+    holder.BorderSizePixel = 0
+    holder.Parent = screenGui
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = holder
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1.2
+    stroke.Transparency = self.Theme.StrokeTransparency
+    stroke.Color = self.AccentColor
+    stroke.Parent = holder
+
+    local icon = Instance.new("ImageLabel")
+    icon.Name = "Icon"
+    icon.BackgroundTransparency = 1
+    icon.Size = UDim2.fromOffset(32, 32)
+    icon.Position = UDim2.fromOffset(14, 16)
+    icon.Image = "rbxassetid://7733960981"
+    icon.ImageColor3 = Color3.fromRGB(235, 235, 245)
+    icon.Parent = holder
+
+    local title = Instance.new("TextLabel")
+    title.Name = "Title"
+    title.BackgroundTransparency = 1
+    title.Size = UDim2.new(1, -96, 0, 20)
+    title.Position = UDim2.fromOffset(56, 10)
+    title.Font = Enum.Font.GothamBold
+    title.Text = "Notification"
+    title.TextColor3 = self.Theme.TitleText
+    title.TextSize = 14
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = holder
+
+    local message = Instance.new("TextLabel")
+    message.Name = "Message"
+    message.BackgroundTransparency = 1
+    message.Size = UDim2.new(1, -96, 0, 28)
+    message.Position = UDim2.fromOffset(56, 28)
+    message.Font = Enum.Font.Gotham
+    message.Text = "Message"
+    message.TextColor3 = self.Theme.BodyText
+    message.TextSize = 13
+    message.TextWrapped = false
+    message.TextTruncate = Enum.TextTruncate.AtEnd
+    message.TextXAlignment = Enum.TextXAlignment.Left
+    message.Parent = holder
+
+    local accent = Instance.new("Frame")
+    accent.Name = "Accent"
+    accent.BackgroundColor3 = self.AccentColor
+    accent.BorderSizePixel = 0
+    accent.Size = UDim2.fromOffset(4, self.Height - 18)
+    accent.Position = UDim2.fromOffset(8, 9)
+    accent.Parent = holder
+
+    local accentCorner = Instance.new("UICorner")
+    accentCorner.CornerRadius = UDim.new(1, 0)
+    accentCorner.Parent = accent
+
+    local progressTrack = Instance.new("Frame")
+    progressTrack.Name = "ProgressTrack"
+    progressTrack.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    progressTrack.BackgroundTransparency = self.Theme.ProgressTrackTransparency
+    progressTrack.BorderSizePixel = 0
+    progressTrack.AnchorPoint = Vector2.new(0.5, 1)
+    progressTrack.Position = UDim2.new(0.5, 0, 1, -6)
+    progressTrack.Size = UDim2.new(1, -24, 0, 3)
+    progressTrack.Parent = holder
+
+    local progressTrackCorner = Instance.new("UICorner")
+    progressTrackCorner.CornerRadius = UDim.new(1, 0)
+    progressTrackCorner.Parent = progressTrack
+
+    local progressFill = Instance.new("Frame")
+    progressFill.Name = "ProgressFill"
+    progressFill.BackgroundColor3 = self.AccentColor
+    progressFill.BorderSizePixel = 0
+    progressFill.Size = UDim2.new(1, 0, 1, 0)
+    progressFill.Parent = progressTrack
+
+    local progressFillCorner = Instance.new("UICorner")
+    progressFillCorner.CornerRadius = UDim.new(1, 0)
+    progressFillCorner.Parent = progressFill
+
+    self.Gui = screenGui
+    self.Holder = holder
+    self.Stroke = stroke
+    self.Icon = icon
+    self.Title = title
+    self.Message = message
+    self.Accent = accent
+    self.ProgressTrack = progressTrack
+    self.ProgressFill = progressFill
+end
+
+function FloatingBar:_getTopMargin()
+    local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
+    local isMobile = UserInputService.TouchEnabled
+    if viewport then
+        isMobile = isMobile or (viewport.X < 1024 and viewport.Y < 768)
+    end
+
+    if isMobile then
+        return self.MobileMarginTop
+    end
+    return self.MarginTop
+end
+
+function FloatingBar:_tweenOrSet(instance, info, goal)
+    if self.UIAnimationsEnabled then
+        local tween = TweenService:Create(instance, info, goal)
+        tween:Play()
+        return tween
+    end
+
+    for property, value in pairs(goal) do
+        instance[property] = value
+    end
+
+    return nil
+end
+
+function FloatingBar:_debugPrint(...)
+    if not self.Debug then
+        return
+    end
+    local pieces = table.create(select("#", ...))
+    for i = 1, select("#", ...) do
+        pieces[i] = tostring(select(i, ...))
+    end
+    print("[EllaFloatingBar]", table.concat(pieces, " "))
+end
+
+function FloatingBar:_applyLayout()
+    if not self.Holder then
+        return
+    end
+    self.Holder.Size = UDim2.fromOffset(self.Width, self.Height)
+    self.Accent.Size = UDim2.fromOffset(4, math.max(self.Height - 18, 10))
+    self.ProgressTrack.Position = UDim2.new(0.5, 0, 1, -6)
+    self.ProgressTrack.Size = UDim2.new(1, -24, 0, 3)
+end
+
+function FloatingBar:_play(item)
+    self.IsShowing = true
+    self.ActiveItem = item
+    self.DismissRequested = false
+    self.DismissInstant = false
+    self:_debugPrint("show", item.Id, item.Title)
+
+    self.Title.Text = item.Title
+    self.Message.Text = item.Message
+    self.Icon.Image = item.Icon
+    self.Stroke.Color = item.AccentColor
+    self.Accent.BackgroundColor3 = item.AccentColor
+    self.ProgressFill.BackgroundColor3 = item.AccentColor
+    self.ProgressFill.Size = UDim2.new(1, 0, 1, 0)
+
+    self.Holder.Position = UDim2.new(0.5, 0, 0, -self.Height - 20)
+    self.Holder.BackgroundTransparency = 1
+
+    local tweenIn = self:_tweenOrSet(
+        self.Holder,
+        TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+        {
+            Position = UDim2.new(0.5, 0, 0, self:_getTopMargin()),
+            BackgroundTransparency = self.Theme.BackgroundTransparency
+        }
+    )
+    if tweenIn then
+        tweenIn.Completed:Wait()
+    end
+
+    local progressTween = self:_tweenOrSet(
+        self.ProgressFill,
+        TweenInfo.new(item.Duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+        {
+            Size = UDim2.new(0, 0, 1, 0)
+        }
+    )
+    self.ActiveProgressTween = progressTween
+    if not progressTween then
+        self.ProgressFill.Size = UDim2.new(0, 0, 1, 0)
+    end
+
+    safeCall(self.OnShow, item)
+
+    local startTime = os.clock()
+    while os.clock() - startTime < item.Duration do
+        if self.DismissRequested then
+            break
+        end
+        task.wait(0.03)
+    end
+
+    if self.ActiveProgressTween then
+        pcall(function()
+            self.ActiveProgressTween:Cancel()
+        end)
+        self.ActiveProgressTween = nil
+    end
+
+    if self.DismissRequested and self.DismissInstant then
+        self.Holder.Position = UDim2.new(0.5, 0, 0, -self.Height - 20)
+        self.Holder.BackgroundTransparency = 1
+        self.IsShowing = false
+        self.ActiveItem = nil
+        safeCall(self.OnHide, item)
+        self:_debugPrint("hide-instant", item.Id, item.Title)
+        return
+    end
+
+    local tweenOut = self:_tweenOrSet(
+        self.Holder,
+        TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.In),
+        {
+            Position = UDim2.new(0.5, 0, 0, -self.Height - 20),
+            BackgroundTransparency = 1
+        }
+    )
+    if tweenOut then
+        tweenOut.Completed:Wait()
+    end
+
+    self.IsShowing = false
+    self.ActiveItem = nil
+    safeCall(self.OnHide, item)
+    self:_debugPrint("hide", item.Id, item.Title)
+end
+
+function FloatingBar:_pump()
+    if self.IsShowing or self.IsPumping then
+        return
+    end
+
+    self.IsPumping = true
+    task.spawn(function()
+        while #self.Queue > 0 do
+            while self.QueuePaused do
+                if #self.Queue == 0 then
+                    break
+                end
+                task.wait(0.05)
+            end
+            if #self.Queue == 0 then
+                break
+            end
+            local item = table.remove(self.Queue, 1)
+            self:_play(item)
+            task.wait(0.06)
+        end
+        self.IsPumping = false
+        safeCall(self.OnQueueEmpty)
+        self:_debugPrint("queue-empty")
+    end)
+end
+
+function FloatingBar:SetAnimationsEnabled(enabled)
+    self.UIAnimationsEnabled = enabled ~= false
+end
+
+function FloatingBar:SetDebug(enabled)
+    self.Debug = enabled == true
+end
+
+function FloatingBar:SetCallbacks(callbacks)
+    if typeof(callbacks) ~= "table" then
+        return
+    end
+    if callbacks.OnShow ~= nil then
+        self.OnShow = callbacks.OnShow
+    end
+    if callbacks.OnHide ~= nil then
+        self.OnHide = callbacks.OnHide
+    end
+    if callbacks.OnQueueEmpty ~= nil then
+        self.OnQueueEmpty = callbacks.OnQueueEmpty
+    end
+end
+
+function FloatingBar:SetMaxQueue(maxQueue)
+    maxQueue = tonumber(maxQueue) or self.MaxQueue
+    if maxQueue < 1 then
+        maxQueue = 1
+    end
+    self.MaxQueue = math.floor(maxQueue)
+end
+
+function FloatingBar:SetDefaultDuration(duration)
+    duration = tonumber(duration) or self.DefaultDuration
+    if duration <= 0 then
+        duration = 0.1
+    end
+    self.DefaultDuration = duration
+end
+
+function FloatingBar:SetAccentColor(color)
+    if typeof(color) ~= "Color3" then
+        return
+    end
+    self.AccentColor = color
+    if not self.ActiveItem then
+        self.Stroke.Color = color
+        self.Accent.BackgroundColor3 = color
+        self.ProgressFill.BackgroundColor3 = color
+    end
+end
+
+function FloatingBar:SetMargins(desktopTop, mobileTop)
+    if tonumber(desktopTop) then
+        self.MarginTop = tonumber(desktopTop)
+    end
+    if tonumber(mobileTop) then
+        self.MobileMarginTop = tonumber(mobileTop)
+    end
+end
+
+function FloatingBar:SetSize(width, height)
+    width = tonumber(width) or self.Width
+    height = tonumber(height) or self.Height
+    if width < 220 then
+        width = 220
+    end
+    if height < 52 then
+        height = 52
+    end
+
+    self.Width = math.floor(width)
+    self.Height = math.floor(height)
+    self:_applyLayout()
+end
+
+function FloatingBar:SetParent(parent)
+    if typeof(parent) ~= "Instance" then
+        return false
+    end
+    self.ParentOverride = parent
+    if self.Gui then
+        self.Gui.Parent = parent
+    end
+    return true
+end
+
+function FloatingBar:SetFonts(titleFont, bodyFont)
+    if titleFont then
+        self.Title.Font = titleFont
+    end
+    if bodyFont then
+        self.Message.Font = bodyFont
+    end
+end
+
+function FloatingBar:SetTextSizes(titleSize, bodySize)
+    if tonumber(titleSize) then
+        self.Title.TextSize = tonumber(titleSize)
+    end
+    if tonumber(bodySize) then
+        self.Message.TextSize = tonumber(bodySize)
+    end
+end
+
+function FloatingBar:SetIconColor(color)
+    if typeof(color) ~= "Color3" then
+        return
+    end
+    self.Icon.ImageColor3 = color
+end
+
+function FloatingBar:SetTheme(theme)
+    if typeof(theme) ~= "table" then
+        return
+    end
+
+    if theme.Background then
+        self.Theme.Background = theme.Background
+        self.Holder.BackgroundColor3 = theme.Background
+    end
+    if theme.TitleText then
+        self.Theme.TitleText = theme.TitleText
+        self.Title.TextColor3 = theme.TitleText
+    end
+    if theme.BodyText then
+        self.Theme.BodyText = theme.BodyText
+        self.Message.TextColor3 = theme.BodyText
+    end
+    if theme.BackgroundTransparency then
+        self.Theme.BackgroundTransparency = theme.BackgroundTransparency
+        self.Holder.BackgroundTransparency = theme.BackgroundTransparency
+    end
+    if theme.StrokeTransparency then
+        self.Theme.StrokeTransparency = theme.StrokeTransparency
+        self.Stroke.Transparency = theme.StrokeTransparency
+    end
+    if theme.ProgressTrackTransparency then
+        self.Theme.ProgressTrackTransparency = theme.ProgressTrackTransparency
+        self.ProgressTrack.BackgroundTransparency = theme.ProgressTrackTransparency
+    end
+end
+
+function FloatingBar:PauseQueue()
+    self.QueuePaused = true
+end
+
+function FloatingBar:ResumeQueue()
+    self.QueuePaused = false
+    self:_pump()
+end
+
+function FloatingBar:ClearQueue()
+    local count = #self.Queue
+    self.Queue = {}
+    return count
+end
+
+function FloatingBar:GetQueueSize()
+    return #self.Queue
+end
+
+function FloatingBar:GetState()
+    return {
+        IsShowing = self.IsShowing,
+        IsPumping = self.IsPumping,
+        QueuePaused = self.QueuePaused,
+        QueueSize = #self.Queue,
+        ActiveId = self.ActiveItem and self.ActiveItem.Id or nil
+    }
+end
+
+function FloatingBar:IsBusy()
+    return self.IsShowing or self.IsPumping
+end
+
+function FloatingBar:DismissCurrent(instant)
+    if not self.ActiveItem then
+        return false
+    end
+    self.DismissRequested = true
+    self.DismissInstant = instant == true
+    return true
+end
+
+function FloatingBar:DismissById(id, instant)
+    if self.ActiveItem and self.ActiveItem.Id == id then
+        return self:DismissCurrent(instant)
+    end
+
+    for i, item in ipairs(self.Queue) do
+        if item.Id == id then
+            table.remove(self.Queue, i)
+            return true
+        end
+    end
+
+    return false
+end
+
+function FloatingBar:DismissAll(instant)
+    self:ClearQueue()
+    self:DismissCurrent(instant == nil or instant)
+end
+
+function FloatingBar:RegisterVariant(name, data)
+    if not name or typeof(data) ~= "table" then
+        return false
+    end
+    local variantName = tostring(name)
+    VARIANTS[variantName] = {
+        AccentColor = typeof(data.AccentColor) == "Color3" and data.AccentColor or self.AccentColor,
+        Icon = normalizeImageSource(data.Icon or DEFAULT_ICON)
+    }
+    return true
+end
+
+function FloatingBar:RemoveVariant(name)
+    local variantName = tostring(name or "")
+    if variantName == "" or variantName == "Default" then
+        return false
+    end
+    VARIANTS[variantName] = nil
+    return true
+end
+
+function FloatingBar:GetVariant(name)
+    local variantName = tostring(name or "Default")
+    local variant = VARIANTS[variantName]
+    if not variant then
+        return nil
+    end
+    return {
+        AccentColor = variant.AccentColor,
+        Icon = variant.Icon
+    }
+end
+
+function FloatingBar:GetVariants()
+    local result = {}
+    for name, variant in pairs(VARIANTS) do
+        result[name] = {
+            AccentColor = variant.AccentColor,
+            Icon = variant.Icon
+        }
+    end
+    return result
+end
+
+local function resolveVariantName(data)
+    local variant = data.Variant or data.Varient or "Default"
+    variant = tostring(variant)
+    if VARIANTS[variant] then
+        return variant
+    end
+    return "Default"
+end
+
+function FloatingBar:_enqueue(data)
+    self.NextId += 1
+
+    local variantName = resolveVariantName(data)
+    local variant = VARIANTS[variantName]
+    local resolvedIcon = normalizeImageSource(data.Icon or variant.Icon)
+    if resolvedIcon == "" then
+        resolvedIcon = DEFAULT_ICON
+    end
+
+    local resolvedAccent = data.AccentColor or variant.AccentColor or self.AccentColor
+    if typeof(resolvedAccent) ~= "Color3" then
+        resolvedAccent = self.AccentColor
+    end
+
+    if #self.Queue >= self.MaxQueue then
+        table.remove(self.Queue, 1)
+    end
+
+    local item = {
+        Id = self.NextId,
+        Title = tostring(data.Title or "Notification"),
+        Message = tostring(data.Content or data.Message or ""),
+        Duration = tonumber(data.Duration) or self.DefaultDuration,
+        Icon = resolvedIcon,
+        AccentColor = resolvedAccent,
+        Variant = variantName
+    }
+
+    if item.Duration <= 0 then
+        item.Duration = 0.1
+    end
+
+    table.insert(self.Queue, item)
+    self:_pump()
+    return item.Id
+end
+
+function FloatingBar:Notify(title, message, duration, icon, accentColor)
+    local data
+    if typeof(title) == "table" then
+        data = title
+        if data.AccentColor == nil and accentColor ~= nil then
+            data.AccentColor = accentColor
+        end
+    else
+        data = {
+            Title = title,
+            Content = message,
+            Duration = duration,
+            Icon = icon,
+            AccentColor = accentColor
+        }
+    end
+
+    return self:_enqueue(data)
+end
+
+function FloatingBar:Push(...)
+    return self:Notify(...)
+end
+
+function FloatingBar:Info(title, message, duration, icon, accentColor)
+    return self:Notify({
+        Title = title,
+        Content = message,
+        Duration = duration,
+        Icon = icon,
+        AccentColor = accentColor,
+        Variant = "Info"
+    })
+end
+
+function FloatingBar:Default(title, message, duration, icon, accentColor)
+    return self:Notify({
+        Title = title,
+        Content = message,
+        Duration = duration,
+        Icon = icon,
+        AccentColor = accentColor,
+        Variant = "Default"
+    })
+end
+
+function FloatingBar:Success(title, message, duration, icon, accentColor)
+    return self:Notify({
+        Title = title,
+        Content = message,
+        Duration = duration,
+        Icon = icon,
+        AccentColor = accentColor,
+        Variant = "Success"
+    })
+end
+
+function FloatingBar:Warn(title, message, duration, icon, accentColor)
+    return self:Notify({
+        Title = title,
+        Content = message,
+        Duration = duration,
+        Icon = icon,
+        AccentColor = accentColor,
+        Variant = "Warn"
+    })
+end
+
+function FloatingBar:Error(title, message, duration, icon, accentColor)
+    return self:Notify({
+        Title = title,
+        Content = message,
+        Duration = duration,
+        Icon = icon,
+        AccentColor = accentColor,
+        Variant = "Error"
+    })
+end
+
+function FloatingBar:Batch(list)
+    if typeof(list) ~= "table" then
+        return {}
+    end
+
+    local ids = {}
+    for _, entry in ipairs(list) do
+        if typeof(entry) == "table" then
+            table.insert(ids, self:Notify(entry))
+        end
+    end
+    return ids
+end
+
+function FloatingBar:Destroy()
+    self:DismissAll(true)
+    if self.Gui then
+        self.Gui:Destroy()
+    end
+    self.Queue = {}
+    self.QueuePaused = false
+    self.IsShowing = false
+    self.IsPumping = false
+    self.ActiveItem = nil
+    self.ActiveProgressTween = nil
+end
+
+local api = FloatingBar.new()
+getgenv().EllaFloatingBar = api
+
+return api
